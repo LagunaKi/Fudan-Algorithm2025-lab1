@@ -1,149 +1,204 @@
-def find_repeats(reference: str, query: str):
-    import math
-
-    # 构建查询序列的后缀自动机
-    class SuffixAutomaton:
-        def __init__(self, s: str):
-            self.states = [{'link': -1, 'len': 0, 'next': {}}]
-            self.last = 0
-            self.count = [0]  # 每个状态的子串出现次数
-            for ch in s:
-                self._extend(ch)
-            # 计算每个状态的endpos计数
-            order = sorted(range(len(self.states)), key=lambda i: self.states[i]['len'], reverse=True)
-            for v in order:
-                link = self.states[v]['link']
-                if link != -1:
-                    self.count[link] += self.count[v]
-
-        def _extend(self, ch: str):
-            states, count = self.states, self.count
-            cur = len(states)
-            states.append({'link': 0, 'len': states[self.last]['len'] + 1, 'next': {}})
-            count.append(1)
-            p = self.last
-            self.last = cur
-            while p != -1 and ch not in states[p]['next']:
-                states[p]['next'][ch] = cur
-                p = states[p]['link']
-            if p == -1:
-                states[cur]['link'] = 0
+def build_suffix_automaton(s: str):
+    """构建字符串 s 的后缀自动机，返回自动机的转移、后缀链接、状态最长长度、每个状态endpos计数、以及每个状态的一个示例end位置。"""
+    # 初始化
+    trans = [{}]           # 状态0转移
+    link = [-1]            # 后缀链接
+    max_len = [0]          # 状态的最长子串长度
+    occ_count = [0]        # endpos计数（初始为0，稍后计算）
+    endpos_example = [-1]  # 状态的一个end位置示例
+    last = 0               # last指向当前尾部状态
+    # 构建自动机
+    for i, ch in enumerate(s):
+        cur = len(trans)    # 新状态索引
+        trans.append({})    
+        max_len.append(max_len[last] + 1)
+        link.append(0)      # 临时设为0（root），稍后可能调整
+        occ_count.append(1) # 每新增一个字符，形成一个新的end
+        endpos_example.append(i)
+        p = last
+        # 尝试从last状态开始添加转移
+        while p != -1 and ch not in trans[p]:
+            trans[p][ch] = cur
+            p = link[p]
+        if p == -1:
+            # 没有找到带ch转移的前缀，当前状态的后缀链接保持为0（root）
+            link[cur] = 0
+        else:
+            q = trans[p][ch]
+            if max_len[p] + 1 == max_len[q]:
+                # 情况1：可以直接将cur的链接指向q
+                link[cur] = q
             else:
-                q = states[p]['next'][ch]
-                if states[p]['len'] + 1 == states[q]['len']:
-                    states[cur]['link'] = q
+                # 情况2：需要克隆状态q'
+                clone = len(trans)
+                trans.append(trans[q].copy())   # 复制q的转移
+                max_len.append(max_len[p] + 1)
+                link.append(link[q])            # 克隆的链接与q相同
+                occ_count.append(0)             # 克隆状态初始不赋值计数，在后面汇总
+                endpos_example.append(endpos_example[q])
+                # 更新p链上所有指向q的转移为指向clone
+                while p != -1 and trans[p].get(ch) == q:
+                    trans[p][ch] = clone
+                    p = link[p]
+                # 调整q和cur的后缀链接
+                link[q] = clone
+                link[cur] = clone
+        last = cur
+    # 通过后缀链接传播occ_count（从长串状态向短串状态累加）
+    order = sorted(range(len(trans)), key=lambda x: max_len[x], reverse=True)
+    for state in order:
+        if link[state] != -1:
+            occ_count[link[state]] += occ_count[state]
+            # 传播endpos示例：如果链接状态还没有示例，则继承
+            if endpos_example[link[state]] == -1:
+                endpos_example[link[state]] = endpos_example[state]
+    return trans, link, max_len, occ_count, endpos_example
+
+def filter_and_merge_repeats(results):
+    """合并连续重复的片段，仅保留最长的片段"""
+    if not results:
+        return []
+
+    # 按起始位置排序
+    results.sort(key=lambda x: (x[0], -x[1]))  # 先按起始位置升序，再按长度降序
+
+    filtered_results = []
+    prev_start, prev_length, prev_count, prev_reversed = results[0]
+
+    for i in range(1, len(results)):
+        start, length, count, reversed_flag = results[i]
+
+        # 只保留最长的不重叠片段
+        if start <= prev_start + prev_length - 1:  # 发现连续或嵌套
+            continue  # 跳过当前短片段
+        else:
+            filtered_results.append((prev_start, prev_length, prev_count, prev_reversed))
+            prev_start, prev_length, prev_count, prev_reversed = start, length, count, reversed_flag
+
+    # 别忘了最后一个片段
+    filtered_results.append((prev_start, prev_length, prev_count, prev_reversed))
+    return filtered_results
+
+
+def find_repeats(reference: str, query: str, min_length: int = 5):
+    """在reference和query中寻找精确匹配的重复片段，检测反向互补出现，输出结果表格。"""
+    trans, link, max_len, occ_count, endpos_ex = build_suffix_automaton(query)
+    results = []         # 收集结果 (pos, length, count, reversed_flag)
+    seen = set()         # 用于避免重复报告相同片段或其反向互补
+
+    def rev_comp(seq: str) -> str:
+        comp_map = {'A':'T', 'T':'A', 'C':'G', 'G':'C'}
+        return "".join(comp_map[ch] for ch in seq[::-1])
+
+    for state, count in enumerate(occ_count):
+        if state == 0 or count < 2:
+            continue  
+        L = max_len[state]
+        if L < min_length:
+            continue  
+        end_idx = endpos_ex[state]
+        subseq = query[end_idx - L + 1 : end_idx + 1]
+        comp_subseq = rev_comp(subseq)
+        if subseq != comp_subseq:
+            cur = 0
+            for ch in comp_subseq:
+                if ch in trans[cur]:
+                    cur = trans[cur][ch]
                 else:
-                    # 克隆状态
-                    clone = len(states)
-                    states.append({
-                        'link': states[q]['link'],
-                        'len': states[p]['len'] + 1,
-                        'next': states[q]['next'].copy()
-                    })
-                    count.append(0)
-                    while p != -1 and states[p]['next'][ch] == q:
-                        states[p]['next'][ch] = clone
-                        p = states[p]['link']
-                    states[q]['link'] = states[cur]['link'] = clone
+                    cur = -1
+                    break
+            if cur != -1:
+                continue  
+        pos = reference.find(subseq)
+        if pos == -1:
+            pos = reference.find(comp_subseq)
+            if pos == -1:
+                continue  
+        key = tuple(sorted([subseq, comp_subseq]))
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append((pos, L, count, False))
 
-    # 1. 在query中构建后缀自动机并查找最长重复子串
-    automaton = SuffixAutomaton(query)
-    states = automaton.states
-    counts = automaton.count
-    max_len = 0
-    max_state = 0
-    for i, st in enumerate(states):
-        if counts[i] >= 2 and st['len'] > max_len:
-            max_len = st['len']
-            max_state = i
-
-    if max_len == 0:
-        return []  # 无重复子序列
-
-    # 还原最长重复子串
-    substr = ""
-    state_to_prev = {}
-    for p, st in enumerate(states):
-        for ch, q in st['next'].items():
-            state_to_prev[q] = (p, ch)
-
-    cur = max_state
-    while states[cur]['len'] > 0:
-        prev_state, ch = state_to_prev[cur]
-        substr = ch + substr
-        cur = prev_state
-
-    substr = substr[-max_len:]  # 取最长匹配子串
-    forward_count = counts[max_state]
-
-    # 2. 在reference中寻找匹配（Smith-Waterman局部比对）
-    def smith_waterman(ref: str, qry: str):
-        n, m = len(ref), len(qry)
-        dp = [[0] * (m+1) for _ in range(n+1)]
-        max_score = 0
-        max_pos = (0, 0)
-        for i in range(1, n+1):
-            for j in range(1, m+1):
-                match = 2 if ref[i-1] == qry[j-1] else -1
-                dp[i][j] = max(
-                    0,
-                    dp[i-1][j-1] + match,
-                    dp[i-1][j] - 1,
-                    dp[i][j-1] - 1
-                )
-                if dp[i][j] > max_score:
-                    max_score = dp[i][j]
-                    max_pos = (i, j)
-        i, j = max_pos
-        while i > 0 and j > 0 and dp[i][j] > 0:
-            if dp[i][j] == dp[i-1][j-1] + (2 if ref[i-1] == qry[j-1] else -1):
-                i -= 1; j -= 1
-            elif dp[i][j] == dp[i-1][j] - 1:
-                i -= 1
+    rev_query = rev_comp(query)
+    lcs_len = [0] * len(trans)
+    cur_state = 0
+    cur_length = 0
+    for ch in rev_query:
+        if ch in trans[cur_state]:
+            cur_state = trans[cur_state][ch]
+            cur_length += 1
+        else:
+            while cur_state != -1 and ch not in trans[cur_state]:
+                cur_state = link[cur_state]
+            if cur_state == -1:
+                cur_state = 0
+                cur_length = 0
             else:
-                j -= 1
-        start = i
-        length = max_pos[0] - start
-        return start, length, max_score
+                cur_length = max_len[cur_state] + 1
+                cur_state = trans[cur_state][ch]
+        if cur_length > lcs_len[cur_state]:
+            lcs_len[cur_state] = cur_length
 
-    ref_start, substr_len, score = smith_waterman(reference, substr)
-    if score == 0:
-        pos = reference.find(substr)
-        if pos != -1:
-            ref_start = pos
-            substr_len = len(substr)
+    for state in range(len(trans)):
+        if link[state] != -1:
+            lcs_len[link[state]] = max(lcs_len[link[state]], min(lcs_len[state], max_len[link[state]]))
 
-    # 3. 检测反向互补序列
-    comp_table = str.maketrans("ACGT", "TGCA")
-    ref_rev = reference.translate(comp_table)[::-1]
-    rev_flag = False
-    rev_start = -1
-    pos = ref_rev.find(substr)
-    if pos != -1:
-        rev_flag = True
-        rev_start = len(reference) - pos - len(substr)
+    for state, L in enumerate(lcs_len):
+        if state == 0 or L < min_length:
+            continue
+        end_idx = endpos_ex[state]
+        subseq = query[end_idx - L + 1 : end_idx + 1]
+        comp_subseq = rev_comp(subseq)
+        if subseq == comp_subseq:
+            continue
+        key = tuple(sorted([subseq, comp_subseq]))
+        if key in seen:
+            continue
+        occ_fwd = occ_count[state]
+        cur = 0
+        for ch in comp_subseq:
+            if ch in trans[cur]:
+                cur = trans[cur][ch]
+            else:
+                cur = -1
+                break
+        occ_rev = occ_count[cur] if cur != -1 else 0
+        total_count = occ_fwd + occ_rev
+        if total_count < 2:
+            continue  
+        pos = reference.find(subseq)
+        if pos == -1:
+            pos = reference.find(comp_subseq)
+            if pos == -1:
+                continue
+        seen.add(key)
+        results.append((pos, L, total_count, True))
 
-    # 4. 统计该片段在 query 中的重复次数，并确定是否发生逆转
-    total_count = forward_count
-    if rev_flag:
-        total_count += 1
+    results_by_pos = {}
+    for pos, length, count, rev_flag in results:
+        if pos not in results_by_pos or length > results_by_pos[pos][1]:
+            results_by_pos[pos] = (pos, length, count, rev_flag)
+    final_results = sorted(results_by_pos.values(), key=lambda x: x[0])
 
-    # 5. 输出结果
-    result = []
-    start_position = ref_start if ref_start != -1 else rev_start
-    result.append((start_position, substr_len, total_count, "是" if rev_flag else "否"))
-    return result
+    # **应用去重和合并策略**
+    final_results = filter_and_merge_repeats(final_results)
 
-# 测试函数（可以替换为实际的reference和query序列）
-"""
-ref = '''CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGC
-GAGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGC
-CATCAACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCA
-ACGCTAGTGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTTACCATCGG
-ACCTCCACGAATCTGAAAAGTTTTAATTTCCGAGCGATACTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCC
-ACGACTCTGTAAGGTTTCAAAATCCGCACGATAGTTACGACCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAAT
-CTGCAAGGTTTCAATATCCGCTCAATGGTTACGGACGGACCTCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAA
-GGTTTCAATATCCGCTTGATACTTACGATCGCAACACCACGGATCTGAAAGGTTTCAATATCCACTCTATA'''
+    print(f"{'Reference_Pos':>12} {'Length':>6} {'Count':>6} {'Reversed':>8}")
+    for pos, length, count, rev_flag in final_results:
+        print(f"{pos:12d} {length:6d} {count:6d} {'Yes' if rev_flag else 'No':>8s}")
+
+
+# 测试函数
+ref = '''CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCGA
+GCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATCA
+ACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTAG
+TGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTTACCATCGGACCTCCAC
+GAATCTGAAAAGTTTTAATTTCCGAGCGATACTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCCACGACTCTG
+TAAGGTTTCAAAATCCGCACGATAGTTACGACCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTT
+TCAATATCCGCTCAATGGTTACGGACGGACCTCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATAT
+CCGCTTGATACTTACGATCGCAACACCACGGATCTGAAAGGTTTCAATATCCACTCTATA
+'''
 
 qry =  '''CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCG
 AGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATC
@@ -160,10 +215,14 @@ CCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTTTCAA
 TCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATATCCGCTTGATACTTACGATCGCAACACCACGG
 ATCTGAAAGGTTTCAATATCCACTCTATA
 '''
-"""
-ref = "CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCGAGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATCAACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTAGTGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATGCACTAACGAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATGCACTAACGAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGCTTACCATCGGACCTCCACGAAT"
-qry = ref  # 使用完整的参考序列作为查询序列
 
 
-print(find_repeats(ref, qry)) # [(参考序列起始位置, 重复序列长度, 重复次数, 是否发生逆转)]
+
+ref = ref.replace('\n', '')  # 移除所有换行符
+qry = qry.replace('\n', '')
+
+
+
+
+find_repeats(ref, qry, min_length=15)
 
