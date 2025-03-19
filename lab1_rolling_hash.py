@@ -5,17 +5,52 @@ def reverse_complement(seq):
     complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
     return ''.join(complement[base] for base in reversed(seq))
 
+class RollingHash:
+    def __init__(self, base=128, mod=10**18+3):
+        self.base = base
+        self.mod = mod
+        self.powers = [1]  # base^0 = 1
+    
+    def precompute_powers(self, max_len):
+        while len(self.powers) <= max_len:
+            self.powers.append((self.powers[-1] * self.base) % self.mod)
+    
+    def get_hash(self, s):
+        hash_val = 0
+        for c in s:
+            hash_val = (hash_val * self.base + ord(c)) % self.mod
+        return hash_val
+    
+    def update_hash(self, prev_hash, prev_char, new_char, k):
+        return ((prev_hash - ord(prev_char) * self.powers[k-1]) * self.base + ord(new_char)) % self.mod
+
 def build_hash_table(S, max_len, min_len=100):
-    """
-    构建哈希表，仅存储长度在 [min_len, max_len] 的子串及其反向互补。
-    """
+    rh = RollingHash()
+    rh.precompute_powers(max_len)
+    
     hash_table = {}
     n = len(S)
-    for i in range(n):
-        for k in range(min_len, min(max_len, n - i) + 1):
+    
+    for k in range(min_len, max_len+1):
+        if k > n: break
+
+        # 预计算初始哈希
+        current_hash = rh.get_hash(S[:k])
+        hash_table.setdefault(current_hash, []).append((0, S[:k]))
+        
+        # 滑动窗口更新哈希
+        for i in range(1, n - k + 1):
+            prev_char = S[i-1]
+            new_char = S[i+k-1]
+            current_hash = rh.update_hash(current_hash, prev_char, new_char, k)
             sub = S[i:i+k]
-            hash_table[sub] = i
-            hash_table[reverse_complement(sub)] = i
+            hash_table.setdefault(current_hash, []).append((i, sub))
+            
+            # 存储反向互补
+            rc_sub = reverse_complement(sub)
+            rc_hash = rh.get_hash(rc_sub)
+            hash_table.setdefault(rc_hash, []).append((i, rc_sub))
+    
     return hash_table
 
 def find_repeats_optimized(S_reference, S_query, max_len=float('inf'), min_len=40):
@@ -24,22 +59,27 @@ def find_repeats_optimized(S_reference, S_query, max_len=float('inf'), min_len=4
     dp = np.full((m + 1), float('inf'))
     dp[0] = 0
     backtrack = [None] * (m + 1)
+    rh = RollingHash()
 
     for j in range(1, m + 1):
-        # 默认处理：逐个字符比对（视为插入/错配，此处不处理）
         dp[j] = dp[j-1] + 1
         backtrack[j] = (j-1, None, False)
-        # 检查重复片段（仅处理长度 ≥ min_len）
+        
         for k in range(min_len, min(max_len, j) + 1):
-            sub = S_query[j - k:j]
-            if sub in hash_table:
-                if dp[j - k] + 1 < dp[j]:
-                    dp[j] = dp[j - k] + 1
-                    pos_ref = hash_table[sub]
-                    is_reverse = (sub != S_reference[pos_ref:pos_ref + k])
-                    backtrack[j] = (j - k, pos_ref, is_reverse)
+            sub = S_query[j-k:j]
+            sub_hash = rh.get_hash(sub)
+            
+            if sub_hash in hash_table:
+                # 处理哈希冲突
+                for pos_ref, stored_sub in hash_table[sub_hash]:
+                    if stored_sub == sub:  # 实际字符串比对
+                        if dp[j - k] + 1 < dp[j]:
+                            dp[j] = dp[j - k] + 1
+                            is_reverse = (sub != S_reference[pos_ref:pos_ref + k])
+                            backtrack[j] = (j - k, pos_ref, is_reverse)
+                        break  # 找到第一个匹配即停止
 
-    # 回溯路径
+    # 回溯逻辑保持不变
     repeats = []
     j = m
     while j > 0:
@@ -51,37 +91,6 @@ def find_repeats_optimized(S_reference, S_query, max_len=float('inf'), min_len=4
 
     return repeats[::-1]
 
-# 绘制 Dot Plot
-def plot_dot(S_reference, S_query):
-    # 初始化坐标列表
-    x_pos, y_pos = [], []     # 正向匹配点
-    x_neg, y_neg = [], []     # 反向互补匹配点
-    count = 0
-    total = len(S_reference) * len(S_query)
-    # 收集匹配点坐标
-    for i in range(len(S_reference)):
-        for j in range(len(S_query)):
-            count += 1
-            if S_reference[i] == S_query[j]:
-                x_pos.append(j)
-                y_pos.append(i)
-            elif S_reference[i] == reverse_complement(S_query[j]):
-                x_neg.append(j)
-                y_neg.append(i)
-        print(f"准备数据... {count/total*100:.2f}%")
-
-    # 一次性绘制所有点
-    plt.figure(figsize=(20, 12))
-    plt.scatter(x_pos, y_pos, c='purple', s=1, alpha=0.5, label='Strand 1')
-    plt.scatter(x_neg, y_neg, c='red', s=1, alpha=0.5, label='Strand -1')
-    plt.title("Dot Plot")
-    plt.xlabel("Query")
-    plt.ylabel("Reference")
-    plt.legend(loc='upper right')
-    plt.xlim(0, len(S_query))
-    plt.ylim(0, len(S_reference))
-    plt.show()
-
 # 测试示例
 S_reference = "CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCGAGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATCAACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTAGTGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTTACCATCGGACCTCCACGAATCTGAAAAGTTTTAATTTCCGAGCGATACTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCCACGACTCTGTAAGGTTTCAAAATCCGCACGATAGTTACGACCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTTTCAATATCCGCTCAATGGTTACGGACGGACCTCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATATCCGCTTGATACTTACGATCGCAACACCACGGATCTGAAAGGTTTCAATATCCACTCTATA"
 S_query = "CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCGAGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATCAACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTAGTGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATGCACTAACGAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATGCACTAACGAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGCTTACCATCGGACCTCCACGAATCTGAAAAGTTTTAATTTCCGAGCGATACTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCCACGACTCTGTAAGGTTTCAAAATCCGCACGATAGTTACGACCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTTTCAATATCCGCTCAATGGTTACGGACGGACCTCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATATCCGCTTGATACTTACGATCGCAACACCACGGATCTGAAAGGTTTCAATATCCACTCTATA"
@@ -90,7 +99,3 @@ repeats = find_repeats_optimized(S_reference, S_query, max_len=len(S_reference),
 for idx, (pos, length, count, is_reverse) in enumerate(repeats, 1):
     print(f"重复{idx}: 位置={pos}, 长度={length}, 重复次数={count}, 反向={is_reverse}")
 
-
-# 绘制 Dot Plot
-print("\n绘制 Dot Plot...")
-plot_dot(S_reference, S_query)
