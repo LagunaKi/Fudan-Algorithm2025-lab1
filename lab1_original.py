@@ -58,48 +58,6 @@ def backtrack_path(dp, S_reference, S_query):
                 # 如果没有找到重复，可能是其他操作（本实验未处理）
                 break
     return path[::-1]  # 反转路径以按顺序输出
-
-# 绘制 Path 图
-def plot_path(S_reference, S_query, path):
-    plt.figure(figsize=(8, 4))
-    plt.title("Path Plot")
-    plt.xlabel("Query")
-    plt.ylabel("Reference")
-    plt.grid(True)
-    
-    # 分离正向和反向路径
-    strand1_points = [(0, 0)]
-    strand_minus1_points = []
-    last_j, last_i = 0, 0
-    for step in path:
-        if step[2] == 'match':
-            strand1_points.append((step[1]+1, step[0]+1))
-            last_j, last_i = step[1]+1, step[0]+1
-        elif step[2] == 'repeat':
-            if step[5]:  # 反向互补
-                strand_minus1_points.append((last_j, last_i))
-                strand_minus1_points.append((step[1], step[0]))
-            else:  # 正向重复
-                strand1_points.append((step[1], step[0]))
-            last_j, last_i = step[1], step[0]
-    
-    # 绘制正向路径（strand 1）
-    if strand1_points:
-        x1 = [p[0] for p in strand1_points]
-        y1 = [p[1] for p in strand1_points]
-        plt.plot(x1, y1, 'b-', label='Strand 1')
-    
-    # 绘制反向路径（strand -1）
-    if strand_minus1_points:
-        x_minus1 = [p[0] for p in strand_minus1_points]
-        y_minus1 = [p[1] for p in strand_minus1_points]
-        plt.plot(x_minus1, y_minus1, 'r-', label='Strand -1')
-    
-    plt.legend(loc='upper right')
-    plt.xlim(-2, len(S_query))
-    plt.ylim(0, len(S_reference))
-    plt.show()
-
 # 绘制 Dot Plot
 def plot_dot(S_reference, S_query):
     plt.figure(figsize=(8, 4))
@@ -154,14 +112,11 @@ def find_repeats(S_reference, S_query):
         pos, length, count, is_reverse = repeat
         print(f"位置: {pos}, 长度: {length}, 重复次数: {count}, 是否反向: {is_reverse}")
     
-    # 绘制 Path 图
-    plot_path(S_reference, S_query, repeats)
-    
     # 绘制 Dot Plot
     plot_dot(S_reference, S_query)
 
 # 测试示例
 S_reference = "ATCG"
-S_query = "ATCGATCG"
+S_query = "ATCGTAGC"
 print("测试示例：")
 find_repeats(S_reference, S_query)
