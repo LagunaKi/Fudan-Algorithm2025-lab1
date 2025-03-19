@@ -1,228 +1,167 @@
-def build_suffix_automaton(s: str):
-    """构建字符串 s 的后缀自动机，返回自动机的转移、后缀链接、状态最长长度、每个状态endpos计数、以及每个状态的一个示例end位置。"""
-    # 初始化
-    trans = [{}]           # 状态0转移
-    link = [-1]            # 后缀链接
-    max_len = [0]          # 状态的最长子串长度
-    occ_count = [0]        # endpos计数（初始为0，稍后计算）
-    endpos_example = [-1]  # 状态的一个end位置示例
-    last = 0               # last指向当前尾部状态
-    # 构建自动机
-    for i, ch in enumerate(s):
-        cur = len(trans)    # 新状态索引
-        trans.append({})    
-        max_len.append(max_len[last] + 1)
-        link.append(0)      # 临时设为0（root），稍后可能调整
-        occ_count.append(1) # 每新增一个字符，形成一个新的end
-        endpos_example.append(i)
-        p = last
-        # 尝试从last状态开始添加转移
-        while p != -1 and ch not in trans[p]:
-            trans[p][ch] = cur
-            p = link[p]
-        if p == -1:
-            # 没有找到带ch转移的前缀，当前状态的后缀链接保持为0（root）
-            link[cur] = 0
+# 导入必要的库
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 定义反向互补函数
+def reverse_complement(seq):
+    """
+    计算 DNA 序列的反向互补。
+    输入: DNA 序列 (例如 "ATCG")
+    输出: 反向互补序列 (例如 "CGAT")
+    """
+    complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+    return ''.join(complement[base] for base in reversed(seq))
+
+# 初始化 DP 表格
+def initialize_dp(n, m):
+    """
+    初始化 DP 表格，维度为 (n+1) x (m+1)。
+    输入: n (S_reference 的长度), m (S_query 的长度)
+    输出: 初始化后的 DP 表格
+    """
+    dp = np.full((n+1, m+1), float('inf'))  # 用无穷大初始化
+    dp[0][0] = 0  # 起点权重为 0
+    return dp
+
+# 路径回溯函数
+def backtrack_path(dp, S_reference, S_query):
+    """
+    从 DP 表格回溯路径，识别重复片段。
+    输入: DP 表格, 参考序列 S_reference, 查询序列 S_query
+    输出: 重复片段信息列表 [(位置, 长度, 重复次数, 是否反向), ...]
+    """
+    path = []
+    i, j = len(S_reference), len(S_query)
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and dp[i][j] == dp[i-1][j-1] and S_reference[i-1] == S_query[j-1]:
+            # 如果是通过匹配到达的，继续回溯
+            i -= 1
+            j -= 1
         else:
-            q = trans[p][ch]
-            if max_len[p] + 1 == max_len[q]:
-                # 情况1：可以直接将cur的链接指向q
-                link[cur] = q
-            else:
-                # 情况2：需要克隆状态q'
-                clone = len(trans)
-                trans.append(trans[q].copy())   # 复制q的转移
-                max_len.append(max_len[p] + 1)
-                link.append(link[q])            # 克隆的链接与q相同
-                occ_count.append(0)             # 克隆状态初始不赋值计数，在后面汇总
-                endpos_example.append(endpos_example[q])
-                # 更新p链上所有指向q的转移为指向clone
-                while p != -1 and trans[p].get(ch) == q:
-                    trans[p][ch] = clone
-                    p = link[p]
-                # 调整q和cur的后缀链接
-                link[q] = clone
-                link[cur] = clone
-        last = cur
-    # 通过后缀链接传播occ_count（从长串状态向短串状态累加）
-    order = sorted(range(len(trans)), key=lambda x: max_len[x], reverse=True)
-    for state in order:
-        if link[state] != -1:
-            occ_count[link[state]] += occ_count[state]
-            # 传播endpos示例：如果链接状态还没有示例，则继承
-            if endpos_example[link[state]] == -1:
-                endpos_example[link[state]] = endpos_example[state]
-    return trans, link, max_len, occ_count, endpos_example
-
-def filter_and_merge_repeats(results):
-    """合并连续重复的片段，仅保留最长的片段"""
-    if not results:
-        return []
-
-    # 按起始位置排序
-    results.sort(key=lambda x: (x[0], -x[1]))  # 先按起始位置升序，再按长度降序
-
-    filtered_results = []
-    prev_start, prev_length, prev_count, prev_reversed = results[0]
-
-    for i in range(1, len(results)):
-        start, length, count, reversed_flag = results[i]
-
-        # 只保留最长的不重叠片段
-        if start <= prev_start + prev_length - 1:  # 发现连续或嵌套
-            continue  # 跳过当前短片段
-        else:
-            filtered_results.append((prev_start, prev_length, prev_count, prev_reversed))
-            prev_start, prev_length, prev_count, prev_reversed = start, length, count, reversed_flag
-
-    # 别忘了最后一个片段
-    filtered_results.append((prev_start, prev_length, prev_count, prev_reversed))
-    return filtered_results
-
-
-def find_repeats(reference: str, query: str, min_length: int = 5):
-    """在reference和query中寻找精确匹配的重复片段，检测反向互补出现，输出结果表格。"""
-    trans, link, max_len, occ_count, endpos_ex = build_suffix_automaton(query)
-    results = []         # 收集结果 (pos, length, count, reversed_flag)
-    seen = set()         # 用于避免重复报告相同片段或其反向互补
-
-    def rev_comp(seq: str) -> str:
-        comp_map = {'A':'T', 'T':'A', 'C':'G', 'G':'C'}
-        return "".join(comp_map[ch] for ch in seq[::-1])
-
-    for state, count in enumerate(occ_count):
-        if state == 0 or count < 2:
-            continue  
-        L = max_len[state]
-        if L < min_length:
-            continue  
-        end_idx = endpos_ex[state]
-        subseq = query[end_idx - L + 1 : end_idx + 1]
-        comp_subseq = rev_comp(subseq)
-        if subseq != comp_subseq:
-            cur = 0
-            for ch in comp_subseq:
-                if ch in trans[cur]:
-                    cur = trans[cur][ch]
-                else:
-                    cur = -1
+            # 检查是否存在重复片段
+            for k in range(1, j+1):
+                if dp[i][j] == dp[i][j-k] + 1:
+                    # 检查正向重复或反向重复
+                    for p in range(len(S_reference) - k + 1):
+                        if S_query[j-k:j] == S_reference[p:p+k]:
+                            path.append((p, k, 1, False))  # 正向重复
+                            j -= k
+                            break
+                        elif S_query[j-k:j] == reverse_complement(S_reference[p:p+k]):
+                            path.append((p, k, 1, True))  # 反向重复
+                            j -= k
+                            break
+                    else:
+                        continue
                     break
-            if cur != -1:
-                continue  
-        pos = reference.find(subseq)
-        if pos == -1:
-            pos = reference.find(comp_subseq)
-            if pos == -1:
-                continue  
-        key = tuple(sorted([subseq, comp_subseq]))
-        if key in seen:
-            continue
-        seen.add(key)
-        results.append((pos, L, count, False))
-
-    rev_query = rev_comp(query)
-    lcs_len = [0] * len(trans)
-    cur_state = 0
-    cur_length = 0
-    for ch in rev_query:
-        if ch in trans[cur_state]:
-            cur_state = trans[cur_state][ch]
-            cur_length += 1
-        else:
-            while cur_state != -1 and ch not in trans[cur_state]:
-                cur_state = link[cur_state]
-            if cur_state == -1:
-                cur_state = 0
-                cur_length = 0
             else:
-                cur_length = max_len[cur_state] + 1
-                cur_state = trans[cur_state][ch]
-        if cur_length > lcs_len[cur_state]:
-            lcs_len[cur_state] = cur_length
-
-    for state in range(len(trans)):
-        if link[state] != -1:
-            lcs_len[link[state]] = max(lcs_len[link[state]], min(lcs_len[state], max_len[link[state]]))
-
-    for state, L in enumerate(lcs_len):
-        if state == 0 or L < min_length:
-            continue
-        end_idx = endpos_ex[state]
-        subseq = query[end_idx - L + 1 : end_idx + 1]
-        comp_subseq = rev_comp(subseq)
-        if subseq == comp_subseq:
-            continue
-        key = tuple(sorted([subseq, comp_subseq]))
-        if key in seen:
-            continue
-        occ_fwd = occ_count[state]
-        cur = 0
-        for ch in comp_subseq:
-            if ch in trans[cur]:
-                cur = trans[cur][ch]
-            else:
-                cur = -1
+                # 如果没有找到重复，可能是其他操作（本实验未处理）
                 break
-        occ_rev = occ_count[cur] if cur != -1 else 0
-        total_count = occ_fwd + occ_rev
-        if total_count < 2:
-            continue  
-        pos = reference.find(subseq)
-        if pos == -1:
-            pos = reference.find(comp_subseq)
-            if pos == -1:
-                continue
-        seen.add(key)
-        results.append((pos, L, total_count, True))
+    return path[::-1]  # 反转路径以按顺序输出
 
-    results_by_pos = {}
-    for pos, length, count, rev_flag in results:
-        if pos not in results_by_pos or length > results_by_pos[pos][1]:
-            results_by_pos[pos] = (pos, length, count, rev_flag)
-    final_results = sorted(results_by_pos.values(), key=lambda x: x[0])
+# 绘制 Path 图
+def plot_path(S_reference, S_query, path):
+    plt.figure(figsize=(8, 4))
+    plt.title("Path Plot")
+    plt.xlabel("Query")
+    plt.ylabel("Reference")
+    plt.grid(True)
+    
+    # 分离正向和反向路径
+    strand1_points = [(0, 0)]
+    strand_minus1_points = []
+    last_j, last_i = 0, 0
+    for step in path:
+        if step[2] == 'match':
+            strand1_points.append((step[1]+1, step[0]+1))
+            last_j, last_i = step[1]+1, step[0]+1
+        elif step[2] == 'repeat':
+            if step[5]:  # 反向互补
+                strand_minus1_points.append((last_j, last_i))
+                strand_minus1_points.append((step[1], step[0]))
+            else:  # 正向重复
+                strand1_points.append((step[1], step[0]))
+            last_j, last_i = step[1], step[0]
+    
+    # 绘制正向路径（strand 1）
+    if strand1_points:
+        x1 = [p[0] for p in strand1_points]
+        y1 = [p[1] for p in strand1_points]
+        plt.plot(x1, y1, 'b-', label='Strand 1')
+    
+    # 绘制反向路径（strand -1）
+    if strand_minus1_points:
+        x_minus1 = [p[0] for p in strand_minus1_points]
+        y_minus1 = [p[1] for p in strand_minus1_points]
+        plt.plot(x_minus1, y_minus1, 'r-', label='Strand -1')
+    
+    plt.legend(loc='upper right')
+    plt.xlim(-2, len(S_query))
+    plt.ylim(0, len(S_reference))
+    plt.show()
 
-    # **应用去重和合并策略**
-    final_results = filter_and_merge_repeats(final_results)
+# 绘制 Dot Plot
+def plot_dot(S_reference, S_query):
+    plt.figure(figsize=(8, 4))
+    plt.title("Dot Plot")
+    plt.xlabel("Query")
+    plt.ylabel("Reference")
+    plt.grid(True)
+    
+    # 找到匹配点
+    for i in range(len(S_reference)):
+        for j in range(len(S_query)):
+            if S_reference[i] == S_query[j]:
+                plt.scatter(j, i, c='purple', s=20, label='Strand 1' if i == 0 and j == 0 else "")
+            elif S_reference[i] == reverse_complement(S_query[j]):
+                plt.scatter(j, i, c='red', s=20, label='Strand -1' if i == 0 and j == 0 else "")
+    
+    plt.legend(loc='upper right')
+    plt.xlim(0, len(S_query))
+    plt.ylim(0, len(S_reference))
+    plt.show()
+# 主函数：识别重复片段并输出结果
+def find_repeats(S_reference, S_query):
+    """
+    使用动态规划识别 S_query 中相对于 S_reference 的重复片段。
+    输入: 参考序列 S_reference, 查询序列 S_query
+    输出: 打印重复片段的位置、长度、重复次数和是否为反向重复
+    """
+    n, m = len(S_reference), len(S_query)
+    dp = initialize_dp(n, m)
+    
+    # 填充 DP 表格
+    for i in range(n+1):
+        for j in range(m+1):
+            if i > 0 and j > 0 and S_reference[i-1] == S_query[j-1]:
+                # 如果当前字符匹配，则权重不变
+                dp[i][j] = min(dp[i][j], dp[i-1][j-1])
+            # 检查是否存在重复片段
+            for k in range(1, j+1):
+                for p in range(n - k + 1):
+                    if (S_query[j-k:j] == S_reference[p:p+k] or 
+                        S_query[j-k:j] == reverse_complement(S_reference[p:p+k])):
+                        dp[i][j] = min(dp[i][j], dp[i][j-k] + 1)
+    
+    # 回溯路径并获取重复片段
+    repeats = backtrack_path(dp, S_reference, S_query)
+    
+    # 输出结果
+    print(f"参考序列: {S_reference}")
+    print(f"查询序列: {S_query}")
+    print("重复片段信息:")
+    for repeat in repeats:
+        pos, length, count, is_reverse = repeat
+        print(f"位置: {pos}, 长度: {length}, 重复次数: {count}, 是否反向: {is_reverse}")
+    
+    # 绘制 Path 图
+    plot_path(S_reference, S_query, repeats)
+    
+    # 绘制 Dot Plot
+    plot_dot(S_reference, S_query)
 
-    print(f"{'Reference_Pos':>12} {'Length':>6} {'Count':>6} {'Reversed':>8}")
-    for pos, length, count, rev_flag in final_results:
-        print(f"{pos:12d} {length:6d} {count:6d} {'Yes' if rev_flag else 'No':>8s}")
-
-
-# 测试函数
-ref = '''CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCGA
-GCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATCA
-ACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTAG
-TGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTTACCATCGGACCTCCAC
-GAATCTGAAAAGTTTTAATTTCCGAGCGATACTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCCACGACTCTG
-TAAGGTTTCAAAATCCGCACGATAGTTACGACCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTT
-TCAATATCCGCTCAATGGTTACGGACGGACCTCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATAT
-CCGCTTGATACTTACGATCGCAACACCACGGATCTGAAAGGTTTCAATATCCACTCTATA
-'''
-
-qry =  '''CTGCAACGTTCGTGGTTCATGTTTGAGCGATAGGCCGAAACTAACCGTGCATGCAACGTTAGTGGATCATTGTGGAACTATAGACTCAAACTAAGCG
-AGCTTGCAACGTTAGTGGACCCTTTTTGAGCTATAGACGAAAACGGACCGAGGCTGCAAGGTTAGTGGATCATTTTTCAGTTTTAGACACAAACAAACCGAGCCATC
-AACGTTAGTCGATCATTTTTGTGCTATTGACCATATCTCAGCGAGCCTGCAACGTGAGTGGATCATTCTTGAGCTCTGGACCAAATCTAACCGTGCCAGCAACGCTA
-GTGGATAATTTTGTTGCTATAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATC
-ATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTG
-CGCCATAGACCATAGCTAAGCGAGCCTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAG
-TGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAG
-CTAGACCAACACTAATCGAGACTGCCTCGTTAGTGCATCATTTTTGCGCCATAGACCATAGCTAAGCGAGCGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATG
-CACTAACGAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGGCTCGCTTAGCTATGGTCTATGGCGCAAAAATGATGCACTAAC
-GAGGCAGTCTCGATTAGTGTTGGTCTATAGCAACAAAATTATCCACTAGCGTTGCTGCTTACCATCGGACCTCCACGAATCTGAAAAGTTTTAATTTCCGAGCGATA
-CTTACGACCGGACCTCCACGAATCAGAAAGGGTTCACTATCCGCTCGATACATACGATCGGACCTCCACGACTCTGTAAGGTTTCAAAATCCGCACGATAGTTACGA
-CCGTACCTCTACGAATCTATAAGGTTTCAATTTCCGCTGGATCCTTACGATCGGACCTCCTCGAATCTGCAAGGTTTCAATATCCGCTCAATGGTTACGGACGGACC
-TCCACGCATCTTAAAGGTTAAAATAGGCGCTCGGTACTTACGATCGGACCTCTCCGAATCTCAAAGGTTTCAATATCCGCTTGATACTTACGATCGCAACACCACGG
-ATCTGAAAGGTTTCAATATCCACTCTATA
-'''
-
-
-
-ref = ref.replace('\n', '')  # 移除所有换行符
-qry = qry.replace('\n', '')
-
-
-
-
-find_repeats(ref, qry, min_length=15)
-
+# 测试示例
+S_reference = "ATCG"
+S_query = "ATCGATCG"
+print("测试示例：")
+find_repeats(S_reference, S_query)
