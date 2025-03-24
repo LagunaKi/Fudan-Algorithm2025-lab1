@@ -72,7 +72,7 @@ def compute_match_lengths(s, sam, reverse=False):
         match_lengths[i+1] = current_len
     return match_lengths
 
-def find_repeats(s_ref, s_query, min_len=40):
+def find_repeats(s_ref, s_query, min_len=50):
     s_ref_rev = reverse_complement(s_ref)
     sam_forward = build_sam(s_ref)
     sam_reverse = build_sam(s_ref_rev)
@@ -142,6 +142,6 @@ def read_query(file_path):
 # 测试示例
 S_reference = read_reference('reference.txt')
 S_query = read_query('query.txt')
-repeats = find_repeats(S_reference, S_query, min_len=1)
+repeats = find_repeats(S_reference, S_query, min_len=50)
 for idx, (pos, length, count, is_reverse) in enumerate(repeats, 1):
     print(f"重复{idx}: 位置={pos}, 长度={length}, 重复次数={count}, 反向={is_reverse}")
