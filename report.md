@@ -70,3 +70,6 @@ BUILD-KMER-HASH-TABLE(S, k)
 
 ## 运算结果
 ![alt text](image.png)
+
+## 代码仓库
+https://github.com/LagunaKi/Fudan-Algorithm2025-lab1.git
